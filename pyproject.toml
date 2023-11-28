@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "tts-hw"
+name = "hv-hw"
 version = "0.1.0"
 description = "DLA homework"
 authors = ["Ivan Dmitriev <i.u.dmitriev@gmail.com>"]
