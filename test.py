@@ -14,8 +14,6 @@ from src.trainer import Trainer
 from src.utils import ROOT_PATH
 from src.utils.object_loading import get_dataloaders
 
-from src.text import text_to_sequence
-
 from src.utils.waveglow import get_WaveGlow
 import waveglow as waveglow
 

@@ -43,8 +43,10 @@ def main(config: DictConfig):
         model = torch.nn.DataParallel(model, device_ids=device_ids)
 
     # get function handles of loss and metrics
-    loss_module = hydra.utils.instantiate(config["loss"]).to(device)
 
+    generator_loss = hydra.utils.instantiate(config["loss"]["generator_loss"]).to(device)
+    discriminator_loss = hydra.utils.instantiate(config["loss"]["discriminator_loss"]).to(device)
+    
     #metrics = [
     #    hydra.utils.instantiate(metric)
     #    for metric_name, metric in config["metrics"].items()
@@ -53,19 +55,33 @@ def main(config: DictConfig):
 
     # build optimizer, learning rate scheduler. delete every line containing lr_scheduler for
     # disabling scheduler
-    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-    optimizer = hydra.utils.instantiate(config["optimizer"], trainable_params)
-    lr_scheduler = hydra.utils.instantiate(config["lr_scheduler"], optimizer)
+    generator_params = filter(lambda p: p.requires_grad, model.generator.parameters())
+    discriminator_params = filter(lambda p: p.requires_grad, model.discriminator.parameters())
 
+    generator_optimizer = hydra.utils.instantiate(config["optimizer"]["generator_optimizer"], 
+                                                  generator_params)
+    discriminator_optimizer = hydra.utils.instantiate(config["optimizer"]["discriminator_optimizer"], 
+                                                      discriminator_params)
+
+
+    generator_lr_scheduler = hydra.utils.instantiate(config["lr_scheduler"]["generator_lr_scheduler"],
+                                                      generator_optimizer)
+    discriminator_lr_scheduler = hydra.utils.instantiate(config["lr_scheduler"]["generator_lr_scheduler"],
+                                                      discriminator_optimizer)
+    
+    spectrogram = hydra.utils.instantiate(config["preprocessing"]["spectrogram"])
     trainer = Trainer(
-        model,
-        loss_module,
-        metrics,
-        optimizer,
+        model=model,
+        generator_loss=generator_loss,
+        discriminator_loss=discriminator_loss,
+        generator_optimizer=generator_optimizer,
+        discriminator_optimizer=discriminator_optimizer,
         config=config,
         device=device,
         dataloaders=dataloaders,
-        lr_scheduler=lr_scheduler,
+        spectrogram=spectrogram,
+        generator_lr_scheduler=generator_lr_scheduler,
+        discriminator_lr_scheduler=discriminator_lr_scheduler,
         len_epoch=config["trainer"].get("len_epoch", None)
     )
 

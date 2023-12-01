@@ -14,10 +14,6 @@ from tqdm import tqdm
 from src.base import BaseTrainer
 from src.logger.utils import plot_spectrogram_to_buf
 from src.utils import inf_loop, MetricTracker
-from src.text import text_to_sequence
-
-from src.utils.waveglow import get_WaveGlow
-import waveglow as waveglow
 
 import torchaudio
 
@@ -30,17 +26,35 @@ class Trainer(BaseTrainer):
     def __init__(
             self,
             model,
-            criterion,
-            metrics,
-            optimizer,
+            generator_loss,
+            discriminator_loss,
+            generator_optimizer,
+            discriminator_optimizer,
             config,
             device,
             dataloaders,
-            lr_scheduler=None,
+            spectrogram,
+            generator_lr_scheduler=None,
+            discriminator_lr_scheduler=None,
             len_epoch=None,
             skip_oom=True,
+            test_wavs=None
     ):
-        super().__init__(model, criterion, metrics, optimizer, config, device)
+        super().__init__(
+            model=model, 
+            generator_optimizer = generator_optimizer, 
+            discriminator_optimizer = discriminator_optimizer, 
+            generator_lr_scheduler = generator_lr_scheduler, 
+            discriminator_lr_scheduler = discriminator_lr_scheduler,
+            config = config,
+            device = device
+        )
+
+        self.generator_loss = generator_loss
+        self.discriminator_loss = discriminator_loss
+
+        self.spectrogram = spectrogram.to(device)
+
         self.skip_oom = skip_oom
         self.config = config
         self.train_dataloader = dataloaders["train"]
@@ -52,17 +66,29 @@ class Trainer(BaseTrainer):
             self.train_dataloader = inf_loop(self.train_dataloader)
             self.len_epoch = len_epoch
         self.evaluation_dataloaders = {k: v for k, v in dataloaders.items() if k != "train"}
-        self.lr_scheduler = lr_scheduler
         self.log_step = 50
 
         self.train_metrics = MetricTracker(
-            "loss", "mel_loss", "pitch_loss", "energy_loss", "duration_loss", "grad norm", *[m.name for m in self.metrics], writer=self.writer
+            "generator_loss",
+            "generator_advantage",
+            "feature_loss",
+            "mel_loss",
+            "discriminator_loss",
+            "msd_discriminator_loss",
+            "msd_discriminator_generated_loss", 
+            "msd_discriminator_real_loss",
+            "mpd_discriminator_loss",
+            "mpd_discriminator_generated_loss", 
+            "mpd_discriminator_real_loss",
+            "grad norm",
+            writer=self.writer
         )
         self.evaluation_metrics = MetricTracker(
-            "loss", *[m.name for m in self.metrics], writer=self.writer
+            "mel_loss", writer=self.writer
         )
 
-        self.waveglow = get_WaveGlow().to(device)
+        self.test_wavs = test_wavs
+
 
     @staticmethod
     def move_batch_to_device(batch, device: torch.device):
@@ -70,13 +96,8 @@ class Trainer(BaseTrainer):
         Move all necessary tensors to the HPU
         """
         tensors = [
-            "src_sequence",
-            "src_positions",
-            "mel_target",
-            "duration_target", 
-            "pitch_target", 
-            "energy_target", 
-            "mel_positions"
+            "spectrogram",
+            "audio"
         ]
         for tensor_for_gpu in tensors:
             batch[tensor_for_gpu] = batch[tensor_for_gpu].to(device)
@@ -121,14 +142,16 @@ class Trainer(BaseTrainer):
             if batch_idx % self.log_step == 0:
                 self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
                 self.logger.debug(
-                    "Train Epoch: {} {} Loss: {:.6f}".format(
-                        epoch, self._progress(batch_idx), batch["loss"].item()
+                    "Train Epoch: {} {} Generator loss: {:.6f}".format(
+                        epoch, self._progress(batch_idx), batch["generator_loss"].item()
                     )
                 )
                 self.writer.add_scalar(
-                    "learning rate", self.lr_scheduler.get_last_lr()[0]
+                    "Generator learning rate", self.generator_lr_scheduler.get_last_lr()[0]
                 )
-                self._log_audio(batch["mel_prediction"])
+                self.writer.add_scalar(
+                    "Discriminator learning rate", self.discriminator_lr_scheduler.get_last_lr()[0]
+                )
                 self._log_scalars(self.train_metrics)
                 # we don't want to reset train metrics at the start of every epoch
                 # because we are interested in recent train metrics
@@ -136,6 +159,11 @@ class Trainer(BaseTrainer):
                 self.train_metrics.reset()
             if batch_idx >= self.len_epoch:
                 break
+        if self.generator_lr_scheduler is not None:
+            self.generator_lr_scheduler.step()
+        if self.discriminator_lr_scheduler is not None:
+            self.discriminator_lr_scheduler.step()
+        
         log = last_train_metrics
 
         for part, dataloader in self.evaluation_dataloaders.items():
@@ -147,27 +175,92 @@ class Trainer(BaseTrainer):
     def process_batch(self, batch, is_train: bool, metrics: MetricTracker):
         batch = self.move_batch_to_device(batch, self.device)
         if is_train:
-            self.optimizer.zero_grad()
+            self.generator_optimizer.zero_grad()
+            self.discriminator_optimizer.zero_grad()
         outputs = self.model(**batch)
         if type(outputs) is dict:
             batch.update(outputs)
         else:
-            batch["logits"] = outputs
+            batch["predicted_audio"] = outputs
 
-        if is_train:
-            losses = self.criterion(**batch)
-            batch["loss"], batch["mel_loss"], batch["pitch_loss"], \
-                batch["energy_loss"], batch["duration_loss"] = losses
-            for loss_name in ["loss", "mel_loss", "pitch_loss", "energy_loss", "duration_loss"]:
+        if not is_train:
+            mel_prediction = self.spectrogram(batch["predicted_audio"])
+            real_audio = F.pad(
+                input=batch['audio'], 
+                pad=(0, batch["predicted_audio"].shape[-1] - batch['audio'].shape[-1])
+            )
+            mel_target = self.spectrogram(real_audio)
+            generator_losses = self.generator_loss(
+                mel_prediction=mel_prediction,
+                mel_target=mel_target
+            )
+            batch.update(generator_losses)
+
+            metrics.update('mel_loss', batch['mel_loss'].item())
+        else:
+            discriminator_generated_pred = self.model.discriminate(batch["predicted_audio"].detach())
+            discriminator_real_pred = self.model.discriminate(batch["audio"])
+            
+            msd_discriminator_losses = self.discriminator_loss(
+                generated_predictions = discriminator_generated_pred['msd_predictions'], 
+                real_predictions = discriminator_real_pred['msd_predictions']
+            )
+            mpd_discriminator_losses = self.discriminator_loss(
+                generated_predictions = discriminator_generated_pred['mpd_predictions'], 
+                real_predictions = discriminator_real_pred['mpd_predictions']
+            )
+            discriminator_loss = (msd_discriminator_losses['discriminator_loss'] + 
+                                  mpd_discriminator_losses['discriminator_loss'])
+            discriminator_loss.backward()
+            self.discriminator_optimizer.step()
+
+            batch.update(msd_discriminator_losses)
+            batch.update(mpd_discriminator_losses)
+            metrics.update('discriminator_loss', discriminator_loss.item())
+            for loss_name in ["discriminator_loss",
+                              "discriminator_generated_loss", 
+                              "discriminator_real_loss",
+                             ]:
+                metrics.update(f'mpd_{loss_name}', mpd_discriminator_losses[loss_name].item())
+                metrics.update(f'msd_{loss_name}', msd_discriminator_losses[loss_name].item())
+
+            batch['real_audio'] = F.pad(
+                input=batch['audio'], 
+                pad=(0, batch["predicted_audio"].shape[-1] - batch['audio'].shape[-1])
+            )
+            mel_prediction = self.spectrogram(batch["predicted_audio"])
+            mel_target = self.spectrogram(batch['real_audio'])
+
+            discriminator_generated = self.model.discriminate(batch["predicted_audio"])
+            discriminator_real = self.model.discriminate(batch["real_audio"])
+
+            discriminator_predictions = [discriminator_generated['mpd_predictions'], 
+                                         discriminator_generated['msd_predictions']]
+            feature_predictions = (discriminator_generated['mpd_features'] + 
+                                   discriminator_generated['msd_features'])
+            feature_target = (discriminator_real['mpd_features'] + 
+                              discriminator_real['msd_features'])
+
+            generator_losses = self.generator_loss(
+                mel_prediction=mel_prediction,
+                mel_target=mel_target,
+                discriminator_predictions=discriminator_predictions,
+                feature_predictions=feature_predictions,
+                feature_target=feature_target,
+            )
+
+            generator_losses['generator_loss'].backward()
+            self.generator_optimizer.step()
+
+            batch.update(generator_losses)
+            for loss_name in ["generator_loss",
+                              "generator_advantage",
+                              "feature_loss",
+                              "mel_loss"]:
                 metrics.update(loss_name, batch[loss_name].item())
-            batch["loss"].backward()
+            
             self._clip_grad_norm()
-            self.optimizer.step()
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
 
-        for met in self.metrics:
-            metrics.update(met.name, met(**batch))
         return batch
 
     def _evaluation_epoch(self, epoch, part, dataloader):
@@ -190,10 +283,11 @@ class Trainer(BaseTrainer):
                     is_train=False,
                     metrics=self.evaluation_metrics,
                 )
+                self._log_audio(batch["predicted_audio"])
             self.writer.set_step(epoch * self.len_epoch, part)
             self._log_scalars(self.evaluation_metrics)
-            self._log_audio(batch["mel_prediction"])
-            self._log_test_phrases()
+            if self.test_wavs is not None:
+                self._log_test_audio()
         return self.evaluation_metrics.result()
 
     def _progress(self, batch_idx):
@@ -225,15 +319,10 @@ class Trainer(BaseTrainer):
         )
         return total_norm.item()
 
-    def _log_audio(self, spectrogram_batch):
-        melspec = random.choice(spectrogram_batch.cpu())
-        mel = melspec.unsqueeze(0).contiguous().transpose(1, 2).to(self.device)
-        waveglow.inference.inference(
-            mel, self.waveglow,
-            f"tmp/waveglow.wav"
-        )
-        audio, sr = torchaudio.load(f"tmp/waveglow.wav")
-        self.writer.add_audio("audio", audio, sample_rate=sr)
+    def _log_audio(self, audio_batch):
+        audio = random.choice(audio_batch.cpu())
+        self.writer.add_audio("audio", audio, sample_rate=self.config["preprocessing"]["sr"])
+
 
     def _log_scalars(self, metric_tracker: MetricTracker):
         if self.writer is None:
@@ -241,26 +330,9 @@ class Trainer(BaseTrainer):
         for metric_name in metric_tracker.keys():
             self.writer.add_scalar(f"{metric_name}", metric_tracker.avg(metric_name))
 
-    def _log_test_phrases(self):
-        texts = [
-            "A defibrillator is a device that gives a high energy electric shock to the heart of someone who is in cardiac arrest",
-            "Massachusetts Institute of Technology may be best known for its math, science and engineering education",
-            "Wasserstein distance or Kantorovich Rubinstein metric is a distance function defined between probability distributions on a given metric space"
-        ]
-        for i, text in enumerate(texts):        
-            src_sequence = torch.from_numpy(np.array(text_to_sequence(text, ["english_cleaners"])))
-
-            src_positions = [np.arange(1, int(src_sequence.shape[0]) + 1)]
-            src_positions = torch.from_numpy(np.array(src_positions)).to(self.device)
-            src_sequence = src_sequence.unsqueeze(0).to(self.device)
-            
+    def _log_test_audio(self):
+        for i, audio in enumerate(self.test_wavs):
             self.model.eval()
-            output = self.model(src_sequence, src_positions)
-            melspec = output["mel_prediction"].squeeze()
-            mel = melspec.unsqueeze(0).contiguous().transpose(1, 2).to(self.device)
-            waveglow.inference.inference(
-                mel, self.waveglow,
-                f"results/waveglow{i}.wav"
-            )
-            audio, sr = torchaudio.load(f"results/waveglow{i}.wav")
-            self.writer.add_audio(f"test_audio_{i}", audio, sample_rate=sr)
+            predicted_audio = self.model(audio)
+            self.writer.add_audio(f"test_audio_{i}", predicted_audio, sample_rate=sr)
+        

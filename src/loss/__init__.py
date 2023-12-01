@@ -1,5 +1,7 @@
-from src.loss.FastSpeech2Loss import FastSpeech2Loss
+from src.loss.generator_loss import GeneratorLoss
+from src.loss.discriminator_loss import DiscriminatorLoss
 
 __all__ = [
-    "FastSpeech2Loss"
+    "GeneratorLoss",
+    "DiscriminatorLoss"
 ]

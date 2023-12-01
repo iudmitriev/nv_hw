@@ -29,14 +29,14 @@ class LJspeechDataset(BaseDataset):
         super().__init__(index, *args, **kwargs)
 
     def _load_dataset(self):
-        #arch_path = self._data_dir / "LJSpeech-1.1.tar.bz2"
-        #print(f"Loading LJSpeech")
-        #download_file(URL_LINKS["dataset"], arch_path)
-        #shutil.unpack_archive(arch_path, self._data_dir)
-        #for fpath in (self._data_dir / "LJSpeech-1.1").iterdir():
-        #    shutil.move(str(fpath), str(self._data_dir / fpath.name))
-        #os.remove(str(arch_path))
-        #shutil.rmtree(str(self._data_dir / "LJSpeech-1.1"))
+        arch_path = self._data_dir / "LJSpeech-1.1.tar.bz2"
+        print(f"Loading LJSpeech")
+        download_file(URL_LINKS["dataset"], arch_path)
+        shutil.unpack_archive(arch_path, self._data_dir)
+        for fpath in (self._data_dir / "LJSpeech-1.1").iterdir():
+            shutil.move(str(fpath), str(self._data_dir / fpath.name))
+        os.remove(str(arch_path))
+        shutil.rmtree(str(self._data_dir / "LJSpeech-1.1"))
 
         files = [file_name for file_name in (self._data_dir / "wavs").iterdir()]
         train_length = int(0.85 * len(files)) # hand split, test ~ 15% 
@@ -88,25 +88,7 @@ class LJspeechDataset(BaseDataset):
                             {
                                 "path": str(wav_path.absolute().resolve()),
                                 "text": w_text.lower(),
-                                "audio_len": length,
-                                "aligment_path": str(
-                                    self._data_dir / "alignments" / f"{i}.npy"
-                                ),
-                                "mel_path": str(
-                                    self._data_dir
-                                    / "mels"
-                                    / f"ljspeech-mel-{i+1:05d}.npy"
-                                ),
-                                "energy_path": str(
-                                    self._data_dir
-                                    / "energy"
-                                    / f"ljspeech-energy-{i+1:05d}.npy"
-                                ),
-                                "pitch_path": str(
-                                    self._data_dir
-                                    / "pitch"
-                                    / f"ljspeech-pitch-{i+1:05d}.npy"
-                                ),
+                                "audio_len": length
                             }
                         )
         return index

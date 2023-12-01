@@ -11,7 +11,6 @@ from torch.utils.data import Dataset
 
 from omegaconf.dictconfig import DictConfig
 
-from src.text import text_to_sequence
 from src.base.base_text_encoder import BaseTextEncoder
 
 logger = logging.getLogger(__name__)
@@ -30,10 +29,10 @@ class BaseDataset(Dataset):
             **kwargs
     ):
         self.config = main_config
+        self.subsample_size = self.config["preprocessing"]["subsample_size"]
+
         self.wave_augs = wave_augs
         self.spec_augs = spec_augs
-        self.log_spec = main_config["preprocessing"]["log_spec"]
-
         self._assert_index_is_valid(index)
         index = self._filter_records_from_dataset(index, max_audio_length, max_text_length, limit)
         # it's a good idea to sort index by audio length
@@ -43,19 +42,22 @@ class BaseDataset(Dataset):
 
     def __getitem__(self, ind):
         data_dict = self._index[ind]
-        mel_spec = torch.from_numpy(np.load(data_dict["mel_path"]))
-        duration = torch.from_numpy(np.load(data_dict["aligment_path"]))
-        pitch = torch.from_numpy(np.load(data_dict["pitch_path"]))
-        energy = torch.from_numpy(np.load(data_dict["energy_path"]))
-        text = data_dict["text"].strip()
-        character = np.array(text_to_sequence(text, ["english_cleaners"]))
+        audio_path = data_dict["path"]
+        audio_wave = self.load_audio(audio_path)
 
+
+        staring_point = np.random.randint(
+            low=0, 
+            high=max(0, audio_wave.shape[1] - self.subsample_size)
+        )
+        audio_wave = audio_wave[:, staring_point:staring_point+self.subsample_size]
+        #audio_wave = audio_wave.unsqueeze(0)
+        audio_wave, audio_spec = self.process_wave(audio_wave)
         return {
-            "mel_target": mel_spec,
-            "duration": duration,
-            "text": torch.from_numpy(character),
-            "pitch": pitch,
-            "energy": energy
+            "audio": audio_wave,
+            "spectrogram": audio_spec,
+            "duration": audio_wave.size(1) / self.config["preprocessing"]["sr"],
+            "audio_path": audio_path,
         }
 
     @staticmethod
@@ -81,8 +83,6 @@ class BaseDataset(Dataset):
             audio_tensor_spec = wave2spec(audio_tensor_wave)
             if self.spec_augs is not None:
                 audio_tensor_spec = self.spec_augs(audio_tensor_spec)
-            if self.log_spec:
-                audio_tensor_spec = torch.log(audio_tensor_spec + 1e-5)
             return audio_tensor_wave, audio_tensor_spec
 
     @staticmethod

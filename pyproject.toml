@@ -31,12 +31,10 @@ torchvision = { version = ">=0.12.0", source="torch"}
 einops = "^0.7.0"
 pytorch-beam-search = "^1.2.2"
 flashlight-text = "^0.0.4"
-kenlm = {url = "https://github.com/kpu/kenlm/archive/master.zip"}
 gdown = "^4.7.1"
 hydra-core = "^1.3.2"
 omegaconf = "^2.3.0"
 pyworld = "^0.3.4"
-waveglow = "^22.12.28"
 
 
 [build-system]
