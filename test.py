@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import torch
+import torchaudio
 import numpy as np
 from tqdm import tqdm
 import hydra
@@ -14,18 +15,15 @@ from src.trainer import Trainer
 from src.utils import ROOT_PATH
 from src.utils.object_loading import get_dataloaders
 
-from src.utils.waveglow import get_WaveGlow
-import waveglow as waveglow
-
 DEFAULT_CHECKPOINT_PATH = ROOT_PATH / "checkpoints" / "checkpoint.pth"
-DEFAULT_INPUT_PATH = ROOT_PATH / "test_texts.json"
+DEFAULT_INPUT_PATH = ROOT_PATH / "test_wavs"
 DEFAULT_RESULTS_PATH = ROOT_PATH / "results"
 
 
 @hydra.main(version_base=None, config_path="src", config_name="config")
 def main(config):
 
-    checkpoint_path, in_file, out_dir = parse_args()
+    checkpoint_path, in_dir, out_dir = parse_args()
 
     logger = logging.getLogger("test")
 
@@ -47,48 +45,32 @@ def main(config):
         model = torch.nn.DataParallel(model)
     model.load_state_dict(state_dict)
 
-    waveglow_object = get_WaveGlow().to(device)
+    spectrogram_generator = hydra.utils.instantiate(config["preprocessing"]["spectrogram"])
+    spectrogram_generator = spectrogram_generator.to(device)
 
     # prepare model for testing
     model = model.to(device)
     model.eval()
     
-    with open(in_file, 'r') as input_file:
-        input_texts = json.load(input_file)
+    in_dir = Path(in_dir)
+    test_wavs = {}
+    for wav in in_dir.iterdir():
+        audio_tensor, sr = torchaudio.load(wav)
+        assert sr == config["preprocessing"]["sr"]
+        test_wavs[wav] = audio_tensor
     
-    out_dir = Path(out_dir).absolute().resolve()
-    with torch.no_grad():
-        for i, text in enumerate(input_texts):
-            if isinstance(text, str):
-                text = {'text': text}
-
-            duration_control = text.get('duration_control', 1.0)
-            pitch_control = text.get('pitch_control', 1.0)
-            energy_control = text.get('energy_control', 1.0)
-            text = text['text']
-
-            src_sequence = torch.from_numpy(np.array(text_to_sequence(text, ["english_cleaners"])))
-
-            src_positions = [np.arange(1, int(src_sequence.shape[0]) + 1)]
-            src_positions = torch.from_numpy(np.array(src_positions)).to(device)
-            src_sequence = src_sequence.unsqueeze(0).to(device)
-            
-            output = model(
-                src_sequence=src_sequence, 
-                src_positions=src_positions,
-                duration_control=duration_control,
-                pitch_control=pitch_control,
-                energy_control=energy_control
-            )
-            melspec = output["mel_prediction"].squeeze()
-            mel = melspec.unsqueeze(0).contiguous().transpose(1, 2).to(device)
-
-            file_name = f'test_{text[:10]}_{duration_control:.1f}_{pitch_control:.1f}_{energy_control:.1f}.wav'
-            out_file = out_dir / file_name
-            waveglow.inference.inference(
-                mel, waveglow_object,
-                str(out_file)
-            )
+    
+    for wav, audio in test_wavs.items():
+        audio = audio.to(device)
+        spectrogram = spectrogram_generator(audio)
+        predicted_audio = model(spectrogram)["predicted_audio"].cpu()
+        predicted_audio = predicted_audio.squeeze(dim=0)
+        out_file = Path(out_dir) / wav.name
+        torchaudio.save(
+            uri=out_file,
+            src=predicted_audio, 
+            sample_rate=config["preprocessing"]["sr"]
+        )
 
 
 def parse_args():
@@ -109,13 +91,13 @@ def parse_args():
     )
     args.add_argument(
         "-t",
-        "--texts",
+        "--test",
         default=str(DEFAULT_INPUT_PATH),
         type=str,
-        help="Path to json file, containing text pharases to turn into speech (default: test_texts.json)",
+        help="Path to directory, containing audio to test (default: test_wavs/)",
     )
     args = args.parse_args()
-    return args.resume, args.texts, args.output
+    return args.resume, args.test, args.output
 
 
 if __name__ == "__main__":
