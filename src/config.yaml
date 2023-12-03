@@ -2,7 +2,7 @@ name: FastSpeech2
 n_gpu: 1
 preprocessing:
   sr: 22050
-  subsample_size: 8192
+  subsample_size: 16384
   spectrogram:
     _target_: src.spectrogram.MelSpectrogram
     config: 
@@ -18,19 +18,21 @@ arch:
   periods: [2, 3, 5, 7, 11]
 data:
   train:
-    batch_size: 24
+    batch_size: 10
     num_workers: 5
     datasets:
       train:
         _target_: src.datasets.LJspeechDataset
         part: "train"
+        max_audio_length: 20.0
   val:
-    batch_size: 24
+    batch_size: 10
     num_workers: 5
     datasets:
       test:
         _target_: src.datasets.LJspeechDataset
         part: "test"
+        max_audio_length: 20.0
         limit: 1024
 optimizer:
   generator_optimizer:
@@ -57,6 +59,7 @@ lr_scheduler:
     gamma: 0.999
 trainer:
   epochs: 50
+  test_dir: "test_wavs/"
   save_dir: "saved/"
   save_period: 5
   verbosity: 2

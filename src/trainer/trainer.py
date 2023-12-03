@@ -138,6 +138,8 @@ class Trainer(BaseTrainer):
                     continue
                 else:
                     raise e
+            self._log_audio(batch['predicted_audio'][0, :, :], name='predicted_audio')
+            self._log_audio(batch['audio'][0, :, :], name='real_audio')
             self.train_metrics.update("grad norm", self.get_grad_norm())
             if batch_idx % self.log_step == 0:
                 self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
@@ -283,7 +285,8 @@ class Trainer(BaseTrainer):
                     is_train=False,
                     metrics=self.evaluation_metrics,
                 )
-                self._log_audio(batch["predicted_audio"])
+            self._log_audio(batch["predicted_audio"][0, :, :], name='predicted_audio')
+            self._log_audio(batch["audio"][0, :, :], name='real_audio')
             self.writer.set_step(epoch * self.len_epoch, part)
             self._log_scalars(self.evaluation_metrics)
             if self.test_wavs is not None:
@@ -319,9 +322,9 @@ class Trainer(BaseTrainer):
         )
         return total_norm.item()
 
-    def _log_audio(self, audio_batch):
-        audio = random.choice(audio_batch.cpu())
-        self.writer.add_audio("audio", audio, sample_rate=self.config["preprocessing"]["sr"])
+    def _log_audio(self, audio, name):
+        audio = audio.cpu()
+        self.writer.add_audio(name, audio, sample_rate=self.config["preprocessing"]["sr"])
 
 
     def _log_scalars(self, metric_tracker: MetricTracker):
@@ -333,6 +336,11 @@ class Trainer(BaseTrainer):
     def _log_test_audio(self):
         for i, audio in enumerate(self.test_wavs):
             self.model.eval()
-            predicted_audio = self.model(audio)
-            self.writer.add_audio(f"test_audio_{i}", predicted_audio, sample_rate=sr)
+            audio = audio.to(self.device)
+            spectrogram = self.spectrogram(audio)
+            predicted_audio = self.model(spectrogram)["predicted_audio"].cpu()
+            predicted_audio = predicted_audio.squeeze(dim=0)
+            audio = audio.cpu()
+            self.writer.add_audio(f"test_real_audio_{i}", audio, sample_rate=self.config["preprocessing"]["sr"])
+            self.writer.add_audio(f"test_predicted_audio_{i}", predicted_audio, sample_rate=self.config["preprocessing"]["sr"])
         

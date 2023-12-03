@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import hydra
 import logging
+import torchaudio
 
 from omegaconf.dictconfig import DictConfig
 
@@ -12,7 +13,7 @@ import src.loss as module_loss
 import src.metric as module_metric
 import src.model as module_arch
 from src.trainer import Trainer
-from src.utils import prepare_device
+from src.utils import prepare_device, ROOT_PATH
 from src.utils.object_loading import get_dataloaders
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -70,6 +71,14 @@ def main(config: DictConfig):
                                                       discriminator_optimizer)
     
     spectrogram = hydra.utils.instantiate(config["preprocessing"]["spectrogram"])
+
+    test_dir = ROOT_PATH / config['trainer']['test_dir']
+    test_wavs = []
+    for wav in test_dir.iterdir():
+        audio_tensor, sr = torchaudio.load(wav)
+        assert sr == config["preprocessing"]["sr"]
+        test_wavs.append(audio_tensor)
+
     trainer = Trainer(
         model=model,
         generator_loss=generator_loss,
@@ -82,6 +91,7 @@ def main(config: DictConfig):
         spectrogram=spectrogram,
         generator_lr_scheduler=generator_lr_scheduler,
         discriminator_lr_scheduler=discriminator_lr_scheduler,
+        test_wavs=test_wavs,
         len_epoch=config["trainer"].get("len_epoch", None)
     )
 
