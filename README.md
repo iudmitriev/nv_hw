@@ -30,7 +30,7 @@ docker build -t src_image .
 docker run \
    --gpus '"device=0"' \
    -it --rm \
-   -v /path/to/local/storage/dir:/repos/asr_project_template/data/datasets \
+   -v /path/to/local/storage/dir:/repos/nv_hw/data/datasets \
    -e WANDB_API_KEY=<your_wandb_api_key> \
 	src_image 
 ```
