@@ -16,7 +16,7 @@ poetry shell
 ```
 or start all commands with poetry
 ```shell 
-poetry run python train.py -c config.json
+poetry run python train.py
 ```
 
 Note:
@@ -41,16 +41,7 @@ Notes:
 * `-e WANDB_API_KEY=<your_wandb_api_key>` -- set envvar for wandb (if you want to use it). You can find your API key
   here: https://wandb.ai/authorize
 
-### Downloading dataset and checkpoint
-To download ljspeech dataset, you should run
-```shell 
-chmod +x scripts/download_dataset.sh
-poetry run sh scripts/download_dataset.sh
-```
-To run model, you should calculate pitch and energy for all files in dataset by running 
-```shell 
-poetry run python scripts/extract_pitch_and_energy.py
-```
+### Downloading model checkpoint
 To download model chekpoint, run
 ```shell 
 chmod +x scripts/download_best_model.sh
@@ -59,13 +50,8 @@ poetry run sh scripts/download_best_model.sh
 
 ## Best model
 #### Description
-The model is a implementation of FastSpeech2 
-
-#### Download results
-To download the generated model files
-```shell 
-poetry run sh scripts/download_results.sh
-```
+The model is a implementation of HifiGAN 
+More precise description and experiments is available [here](https://wandb.ai/iudmitriev/nv_project/reports/-NV--Vmlldzo2MTUwNTUw)
 
 #### Training
 To train this model independently, you should run
@@ -75,11 +61,11 @@ poetry run python train.py
 The config for this model is file /src/config.yaml 
 
 #### Testing
-To generate speech for specific text, you should change add it to test_texts.json and run
+To test this model with audio file, you should download checkpoint, add audio file to /test_wavs/ and run
 ```shell 
 poetry run python test.py
 ```
-The resulting voice recording will appear in /results/
+The resulting recording will appear in /results/
 
 ## Credits
 This homework was done by Ivan Dmitriev
