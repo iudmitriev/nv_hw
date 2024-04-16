@@ -8,6 +8,3 @@ RUN poetry config virtualenvs.create false
 RUN poetry install
 
 RUN chmod +x scripts/download_best_model.sh
-
-# Expose port (for some reason...)
-EXPOSE 3000
